@@ -1,0 +1,61 @@
+# Data and datasets
+data/
+datasets/
+
+# Model checkpoints
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+
+# Tokenized datasets and arrays
+*.npy
+*.npz
+*.memmap
+
+# Tokenizer / experiment artifacts
+outputs/
+*.pkl
+*.pickle
+
+# Logs and experiment tracking
+logs/
+wandb/
+tensorboard/
+runs/
+*.log
+
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# OS / editor files
+.DS_Store
+.vscode/
+.idea/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Course / submission artifacts
+tests/
+submission/
+make_submission.sh
+cs336_assignment1_basics.pdf
+AGENTS.md
+CLAUDE.md
+CHANGELOG.md
+*.zip
