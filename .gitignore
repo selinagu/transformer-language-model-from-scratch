@@ -51,7 +51,6 @@ dist/
 *.egg-info/
 
 # Course / submission artifacts
-tests/
 submission/
 make_submission.sh
 cs336_assignment1_basics.pdf
