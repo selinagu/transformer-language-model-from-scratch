@@ -1,8 +1,8 @@
-# Mini GPT from Scratch
+# Transformer Language Model from Scratch
 
 ## Overview
 
-A compact, from-scratch GPT-style language-model pipeline in PyTorch:
+An end-to-end GPT-style language model implemented in PyTorch, covering byte-level BPE tokenization, Transformer training, checkpointing, and inference serving.
 
 ~~~text
 raw UTF-8 text → byte-level BPE → tokenized NumPy data
@@ -13,12 +13,10 @@ The repository includes a verified CPU smoke path that creates all artifacts loc
 
 ## Engineering Highlights
 
-- Byte-level BPE training, artifact export, and deterministic tokenizer fingerprints.
-- Config-driven Transformer training with RMSNorm, RoPE, SwiGLU, causal attention, AdamW, warmup/cosine learning rate scheduling, and gradient clipping.
-- Checkpoints carry model, optimizer, RNG, model configuration, and tokenizer-identity metadata.
-- Resume restores Python, NumPy, PyTorch CPU, and available CUDA RNG state.
-- FastAPI startup rejects missing, legacy, vocabulary-mismatched, special-token-mismatched, or fingerprint-mismatched artifacts.
-- SDPA and KV-cache inference paths are covered by regression tests.
+- **Transformer implementation:** Built a decoder-only language model with RMSNorm, RoPE, SwiGLU, and causal multi-head attention in PyTorch.
+- **Training pipeline:** Implemented byte-level BPE tokenization, AdamW optimization, learning-rate scheduling, gradient clipping, and checkpointing.
+- **Reliable inference:** Added SDPA and KV-cache decoding, with numerical parity and regression tests.
+- **Reproducibility and serving:** Implemented deterministic CPU training resume, tokenizer-checkpoint compatibility validation, and FastAPI inference, validated through an end-to-end CPU integration test.
 
 ## Architecture
 
@@ -29,13 +27,18 @@ train.py           config + NPY data + tokenizer → checkpoint.pt
 service.py         compatible checkpoint + tokenizer → /health and /generate
 ~~~
 
-## Results
+## Validation Results
 
-The included tiny CPU workflow is a correctness smoke test, not a quality benchmark. It trains only two steps and makes no claim about generation quality.
+- **67 automated tests passed**, covering tokenization, Transformer components, optimization, checkpointing, generation, and inference serving.
+- **End-to-end CPU integration:** Verified the complete workflow from raw text through BPE training, dataset preparation, Transformer training, checkpointing, and HTTP inference.
+- **Inference correctness:** Validated SDPA and KV-cache implementations against reference computation paths.
+- **Reproducible training:** Verified identical CPU model parameters between uninterrupted and checkpoint-resumed training under controlled settings.
 
-A TinyStories run was conducted historically, but its quantitative outputs were not re-verified as part of this reproducibility workflow; no historical metrics or sample generations are asserted here.
+The included tiny CPU workflow is a correctness smoke test, not a language-generation quality benchmark. A historical TinyStories experiment was conducted, but its quantitative results have not been re-verified for this release.
 
 ## Quick Start
+
+Shell examples target Bash, Linux, and WSL.
 
 Install the locked project environment:
 
@@ -49,13 +52,26 @@ printf "a tiny validation story <|endoftext|> continues\n" > artifacts/validatio
 Create BPE artifacts. The vocabulary size must match the training config:
 
 ~~~bash
-uv run python -m cs336_basics.train_bpe   --input-path artifacts/train.txt   --vocab-size 264   --vocab-path artifacts/vocab.pkl   --merges-path artifacts/merges.pkl   --special-token "<|endoftext|>"   --num-processes 1
+uv run python -m cs336_basics.train_bpe \
+  --input-path artifacts/train.txt \
+  --vocab-size 264 \
+  --vocab-path artifacts/vocab.pkl \
+  --merges-path artifacts/merges.pkl \
+  --special-token "<|endoftext|>" \
+  --num-processes 1
 ~~~
 
 Tokenize both raw text files with those exact artifacts:
 
 ~~~bash
-uv run python -m cs336_basics.prepare_data   --train-text-path artifacts/train.txt   --validation-text-path artifacts/validation.txt   --vocab-path artifacts/vocab.pkl   --merges-path artifacts/merges.pkl   --train-output-path artifacts/train.npy   --validation-output-path artifacts/validation.npy   --special-token "<|endoftext|>"
+uv run python -m cs336_basics.prepare_data \
+  --train-text-path artifacts/train.txt \
+  --validation-text-path artifacts/validation.txt \
+  --vocab-path artifacts/vocab.pkl \
+  --merges-path artifacts/merges.pkl \
+  --train-output-path artifacts/train.npy \
+  --validation-output-path artifacts/validation.npy \
+  --special-token "<|endoftext|>"
 ~~~
 
 The command writes two uint32 NPY files and artifacts/train.npy.metadata.json, including token counts, dataset hashes, and the tokenizer fingerprint.
@@ -63,7 +79,15 @@ The command writes two uint32 NPY files and artifacts/train.npy.metadata.json, i
 Train the tiny CPU model:
 
 ~~~bash
-uv run python -m cs336_basics.train   --config configs/tiny_cpu_smoke.yaml   --train_data artifacts/train.npy   --valid_data artifacts/validation.npy   --vocab_path artifacts/vocab.pkl   --merges_path artifacts/merges.pkl   --checkpoint_path artifacts/checkpoint.pt   --log_path artifacts/train.csv   --device cpu
+uv run python -m cs336_basics.train \
+  --config configs/tiny_cpu_smoke.yaml \
+  --train_data artifacts/train.npy \
+  --valid_data artifacts/validation.npy \
+  --vocab_path artifacts/vocab.pkl \
+  --merges_path artifacts/merges.pkl \
+  --checkpoint_path artifacts/checkpoint.pt \
+  --log_path artifacts/train.csv \
+  --device cpu
 ~~~
 
 For larger experiments, choose a configuration whose model.vocab_size exactly equals the BPE vocabulary size and retain the checkpoint, vocabulary, and merges together.
@@ -75,21 +99,31 @@ The CLI entrypoints above are the generic, reproducible workflow. The TinyStorie
 Start the verified artifacts locally:
 
 ~~~bash
-uv run python -m cs336_basics.service   --checkpoint-path artifacts/checkpoint.pt   --vocab-path artifacts/vocab.pkl   --merges-path artifacts/merges.pkl   --device cpu
+uv run python -m cs336_basics.service \
+  --checkpoint-path artifacts/checkpoint.pt \
+  --vocab-path artifacts/vocab.pkl \
+  --merges-path artifacts/merges.pkl \
+  --device cpu
 ~~~
 
 In another terminal:
 
 ~~~bash
 curl http://localhost:8000/health
-curl -X POST http://localhost:8000/generate   -H "content-type: application/json"   -d "{\"prompt\":\"a tiny story\",\"max_new_tokens\":8,\"temperature\":0}"
+curl -X POST http://localhost:8000/generate \
+  -H "content-type: application/json" \
+  -d "{\"prompt\":\"a tiny story\",\"max_new_tokens\":8,\"temperature\":0}"
 ~~~
 
 The Docker image installs the CPU service runtime requirements and uses CPU-only PyTorch. Build it, then replace <repo-root> with this checkout absolute path:
 
 ~~~bash
 docker build -t mini-gpt .
-docker run --rm -p 8000:8000   -v "<repo-root>/artifacts/checkpoint.pt:/models/checkpoint.pt:ro"   -v "<repo-root>/artifacts/vocab.pkl:/models/vocab.pkl:ro"   -v "<repo-root>/artifacts/merges.pkl:/models/merges.pkl:ro"   mini-gpt
+docker run --rm -p 8000:8000 \
+  -v "<repo-root>/artifacts/checkpoint.pt:/models/checkpoint.pt:ro" \
+  -v "<repo-root>/artifacts/vocab.pkl:/models/vocab.pkl:ro" \
+  -v "<repo-root>/artifacts/merges.pkl:/models/merges.pkl:ro" \
+  mini-gpt
 ~~~
 
 The container validates mounted artifacts at startup. Missing files and incompatible tokenizer artifacts fail with a clear startup error.
@@ -108,6 +142,8 @@ Tests cover BPE round trips and special tokens, tokenizer/checkpoint compatibili
 
 Tokenizer artifacts are pickle files; load only artifacts you trust.
 
+Benchmark tooling and measurement protocol are documented in [benchmarks/README.md](benchmarks/README.md); no numeric performance claims are made without recorded results.
+
 ## Repository Structure
 
 ~~~text
@@ -125,6 +161,6 @@ Dockerfile
 requirements-service.txt
 ~~~
 
-## Acknowledgments
+### Acknowledgments
 
-Built as part of the Stanford CS336 Assignment 1 learning exercise.
+This project was inspired by Stanford&#39;s [CS336: Language Modeling from Scratch](https://stanford-cs336.github.io/spring2025/), particularly Assignment 1. The repository also includes additional engineering work on inference optimization, reproducible training, testing, and model serving.
