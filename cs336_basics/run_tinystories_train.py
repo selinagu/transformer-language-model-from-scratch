@@ -1,9 +1,8 @@
 import time
-import pickle
 import tracemalloc
-import os
 
 from cs336_basics.train_bpe import train_bpe
+from cs336_basics.tokenizer import save_tokenizer_artifacts
 
 
 def main():
@@ -24,16 +23,9 @@ def main():
     current_mem, peak_mem = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
-    os.makedirs("outputs", exist_ok=True)
-
     vocab_path = "outputs/tinystories_vocab_10000.pkl"
     merges_path = "outputs/tinystories_merges_10000.pkl"
-
-    with open(vocab_path, "wb") as f:
-        pickle.dump(vocab, f)
-
-    with open(merges_path, "wb") as f:
-        pickle.dump(merges, f)
+    save_tokenizer_artifacts(vocab, merges, vocab_path, merges_path)
 
     longest_token_id, longest_token = max(vocab.items(), key=lambda x: len(x[1]))
 

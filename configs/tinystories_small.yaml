@@ -1,0 +1,27 @@
+model:
+  vocab_size: 10000
+  context_length: 128
+  d_model: 128
+  num_layers: 2
+  num_heads: 4
+  d_ff: 352
+  theta: 10000.0
+  attention_backend: naive
+
+training:
+  batch_size: 16
+  max_iters: 1000
+  learning_rate: 0.0003
+  min_learning_rate: 0.00003
+  warmup_iters: 100
+  weight_decay: 0.01
+  grad_clip: 1.0
+  eval_interval: 100
+  val_batches: 10
+  save_interval: 500
+  seed: 0
+
+generation:
+  max_new_tokens: 128
+  temperature: 0.8
+  top_p: 0.9

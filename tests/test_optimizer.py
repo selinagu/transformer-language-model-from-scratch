@@ -127,12 +127,24 @@ def test_checkpoint_restores_model_and_optimizer(tmp_path):
     loss.backward()
     optimizer.step()
 
+    metadata = {
+        "model_config": {
+            "vocab_size": 16,
+            "context_length": 8,
+            "d_model": 16,
+            "num_layers": 1,
+            "num_heads": 4,
+            "d_ff": 32,
+            "theta": 10_000.0,
+        }
+    }
     checkpoint_path = tmp_path / "checkpoint.pt"
     save_checkpoint(
         model=model,
         optimizer=optimizer,
         iteration=7,
         out=str(checkpoint_path),
+        metadata=metadata,
     )
 
     restored_model = nn.Linear(2, 1)
@@ -151,6 +163,14 @@ def test_checkpoint_restores_model_and_optimizer(tmp_path):
     )
 
     assert restored_iteration == 7
+
+    payload = torch.load(
+        checkpoint_path,
+        map_location="cpu",
+        weights_only=True,
+    )
+
+    assert payload["metadata"] == metadata
 
     for original, restored in zip(model.parameters(), restored_model.parameters()):
         assert torch.allclose(original, restored)

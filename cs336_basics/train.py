@@ -1,179 +1,140 @@
 import argparse
-import time
-import csv 
-import json
+import random
 import os
+from pathlib import Path
+
 import numpy as np
 import torch
 
+from cs336_basics.config import (
+    ExperimentConfig,
+    apply_overrides,
+    load_experiment_config,
+    save_experiment_config,
+)
+from cs336_basics.optimizer import AdamW
+from cs336_basics.tokenizer import Tokenizer, tokenizer_artifact_metadata
+from cs336_basics.trainer import Trainer
 from cs336_basics.transformer import TransformerLM
-from cs336_basics.optimizer import (
-    AdamW,
-    get_batch,
-    cross_entropy,
-    gradient_clipping,
-    get_lr_cosine_schedule,
-    save_checkpoint,
-    load_checkpoint,
+
+
+MODEL_CONFIG_FIELDS = (
+    "vocab_size",
+    "context_length",
+    "d_model",
+    "num_layers",
+    "num_heads",
+    "d_ff",
+    "theta",
+)
+TRAINING_CONFIG_FIELDS = (
+    "batch_size",
+    "max_iters",
+    "learning_rate",
+    "min_learning_rate",
+    "warmup_iters",
+    "weight_decay",
+    "grad_clip",
+    "eval_interval",
+    "val_batches",
+    "save_interval",
+    "seed",
 )
 
-def estimate_val_loss(model, valid_data, args):
-    model.eval()
-    losses = []
 
-    with torch.no_grad():
-        for _ in range(args.val_batches):
-            xb, yb = get_batch(
-                valid_data,
-                args.batch_size,
-                args.context_length,
-                args.device,
-            )
-            logits = model(xb)
-            loss = cross_entropy(logits, yb)
-            losses.append(loss.item())
-
-    model.train()
-
-    return sum(losses) / len(losses)
-
-
-
-def main():
+def parse_args():
     parser = argparse.ArgumentParser()
-
+    parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--train_data", type=str, required=True)
     parser.add_argument("--valid_data", type=str, required=True)
+    parser.add_argument("--vocab_path", type=str, required=True)
+    parser.add_argument("--merges_path", type=str, required=True)
+    parser.add_argument("--special_token", action="append", default=None)
     parser.add_argument("--checkpoint_path", type=str, default="checkpoint.pt")
     parser.add_argument("--resume_from", type=str, default=None)
     parser.add_argument("--log_path", type=str, default="train_log.csv")
-
-    parser.add_argument("--vocab_size", type=int, default=10000)
-    parser.add_argument("--context_length", type=int, default=256)
-    parser.add_argument("--num_layers", type=int, default=4)
-    parser.add_argument("--d_model", type=int, default=512)
-    parser.add_argument("--num_heads", type=int, default=16)
-    parser.add_argument("--d_ff", type=int, default=1344)
-    parser.add_argument("--theta", type=float, default=10000.0)
-
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--max_iters", type=int, default=5000)
-    parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--min_lr", type=float, default=3e-5)
-    parser.add_argument("--warmup_iters", type=int, default=500)
-    parser.add_argument("--weight_decay", type=float, default=0.01)
-    parser.add_argument("--grad_clip", type=float, default=1.0)
-
-    parser.add_argument("--eval_interval", type=int, default=100)
-    parser.add_argument("--val_batches", type=int, default=20)
-    parser.add_argument("--save_interval", type=int, default=1000)
-
     parser.add_argument("--device", type=str, default="cuda:0")
 
-    args = parser.parse_args()
+    for field in MODEL_CONFIG_FIELDS:
+        parser.add_argument(f"--{field}", type=float if field == "theta" else int, default=None)
 
+    parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--max_iters", type=int, default=None)
+    parser.add_argument("--lr", dest="learning_rate", type=float, default=None)
+    parser.add_argument("--min_lr", dest="min_learning_rate", type=float, default=None)
+    parser.add_argument("--warmup_iters", type=int, default=None)
+    parser.add_argument("--weight_decay", type=float, default=None)
+    parser.add_argument("--grad_clip", type=float, default=None)
+    parser.add_argument("--eval_interval", type=int, default=None)
+    parser.add_argument("--val_batches", type=int, default=None)
+    parser.add_argument("--save_interval", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    experiment_config = load_experiment_config(args.config) if args.config else ExperimentConfig()
+    experiment_config = apply_overrides(
+        experiment_config,
+        model_overrides={field: getattr(args, field) for field in MODEL_CONFIG_FIELDS},
+        training_overrides={
+            field: getattr(args, field) for field in TRAINING_CONFIG_FIELDS
+        },
+    )
+    model_config = experiment_config.model
+    training_config = experiment_config.training
+    special_tokens = args.special_token or ["<|endoftext|>"]
+    tokenizer = Tokenizer.from_files(
+        args.vocab_path,
+        args.merges_path,
+        special_tokens=special_tokens,
+    )
+    tokenizer_metadata = tokenizer_artifact_metadata(tokenizer)
+    if tokenizer_metadata["vocab_size"] != model_config.vocab_size:
+        raise ValueError(
+            "tokenizer vocabulary size does not match model vocab_size: "
+            f"{tokenizer_metadata['vocab_size']} != {model_config.vocab_size}"
+        )
+
+    torch.manual_seed(training_config.seed)
+    random.seed(training_config.seed)
+    np.random.seed(training_config.seed)
     os.makedirs(os.path.dirname(args.log_path) or ".", exist_ok=True)
-
-    with open(args.log_path + ".config.json", "w") as f:
-        json.dump(vars(args), f, indent=2)
+    save_experiment_config(experiment_config, Path(args.log_path).with_suffix(".resolved.yaml"))
 
     train_data = np.load(args.train_data, mmap_mode="r")
     valid_data = np.load(args.valid_data, mmap_mode="r")
-
-    model = TransformerLM(
-        vocab_size=args.vocab_size,
-        context_length=args.context_length,
-        num_layers=args.num_layers,
-        d_model=args.d_model,
-        num_heads=args.num_heads,
-        d_ff=args.d_ff,
-        theta=args.theta,
-        device=args.device,
-    )
-
+    model = TransformerLM(**model_config.model_kwargs(), device=args.device)
     optimizer = AdamW(
         model.parameters(),
-        lr=args.lr,
+        lr=training_config.learning_rate,
         betas=(0.9, 0.95),
         eps=1e-8,
-        weight_decay=args.weight_decay,
+        weight_decay=training_config.weight_decay,
     )
+    checkpoint_metadata = {
+        "format_version": 2,
+        "checkpoint_step_semantics": "next_step",
+        "model_config": model_config.model_kwargs(),
+        "tokenizer": tokenizer_metadata,
+        "training_config": experiment_config.to_dict()["training"],
+    }
+    trainer = Trainer(
+        model=model,
+        optimizer=optimizer,
+        train_data=train_data,
+        valid_data=valid_data,
+        model_config=model_config,
+        training_config=training_config,
+        device=args.device,
+        checkpoint_path=args.checkpoint_path,
+        checkpoint_metadata=checkpoint_metadata,
+        log_path=args.log_path,
+    )
+    start_step = trainer.resume(args.resume_from) if args.resume_from else 0
+    trainer.fit(start_step=start_step)
 
-    if args.resume_from is not None:
-        start_iter = load_checkpoint(args.resume_from, model, optimizer)
-    else:
-        start_iter = 0
-
-    if start_iter == 0:
-        with open(args.log_path, "w", newline="") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=["steps", "train_loss", "val_loss", "lr", "elapsed_seconds"],
-            )
-            writer.writeheader()
-
-    model.train()
-    start_time = time.time()
-
-    for step in range(start_iter, args.max_iters):
-        lr = get_lr_cosine_schedule(
-            step,
-            args.lr,
-            args.min_lr,
-            args.warmup_iters,
-            args.max_iters,
-        )
-
-        for group in optimizer.param_groups:
-            group["lr"] = lr
-
-        xb, yb = get_batch(
-            train_data,
-            args.batch_size,
-            args.context_length,
-            args.device,
-        )
-
-        optimizer.zero_grad()
-        logits = model(xb)
-        loss = cross_entropy(logits, yb)
-        loss.backward()
-
-        if args.grad_clip is not None:
-            gradient_clipping(model.parameters(), args.grad_clip)
-
-        optimizer.step()
-
-        if step % args.eval_interval == 0:
-            val_loss = estimate_val_loss(model, valid_data, args)
-            elapsed = time.time() - start_time
-            print(
-                f"step {step} | "
-                f"train loss {loss.item():.4f} | "
-                f"val loss {val_loss:.4f} | "
-                f"lr {lr:.2e} | "
-                f"time {elapsed:.1f}s"
-            )
-
-            with open(args.log_path, "a", newline="") as f:
-                writer = csv.DictWriter(
-                    f,
-                    fieldnames=["step", "train_loss", "val_loss", "lr", "elapsed_seconds"],
-                )
-                writer.writerow(
-                    {
-                        "step": step,
-                        "train_loss": loss.item(),
-                        "val_loss": val_loss,
-                        "lr": lr,
-                        "elapsed_seconds": elapsed,
-                    }
-                )
-
-        if step > 0 and step % args.save_interval == 0:
-            save_checkpoint(model, optimizer, step, args.checkpoint_path)
-
-    save_checkpoint(model, optimizer, args.max_iters, args.checkpoint_path)
 
 if __name__ == "__main__":
     main()

@@ -1,9 +1,28 @@
+import hashlib
+import pickle
+from pathlib import Path
+from typing import Any
+
 import regex as re
 from collections.abc import Iterable, Iterator
-import pickle
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
+
+def save_tokenizer_artifacts(
+    vocab: dict[int, bytes],
+    merges: list[tuple[bytes, bytes]],
+    vocab_path: str | Path,
+    merges_path: str | Path,
+) -> None:
+    """Persist BPE vocabulary and merges in the format Tokenizer.from_files expects."""
+    for path in (Path(vocab_path), Path(merges_path)):
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    with Path(vocab_path).open("wb") as handle:
+        pickle.dump(vocab, handle)
+    with Path(merges_path).open("wb") as handle:
+        pickle.dump(merges, handle)
 
 
 class Tokenizer:
@@ -67,8 +86,6 @@ class Tokenizer:
         """
         Load the trained tokenizer.
         """
-        import pickle
-
         with open(vocab_filepath, "rb") as f:
             vocab = pickle.load(f)
 
@@ -198,3 +215,37 @@ class Tokenizer:
         text = text_bytes.decode("utf-8", errors = "replace")
 
         return text
+
+def _hash_bytes(hasher, value: bytes) -> None:
+    hasher.update(len(value).to_bytes(8, byteorder="big"))
+    hasher.update(value)
+
+
+def tokenizer_artifact_metadata(tokenizer: Tokenizer) -> dict[str, Any]:
+    """Return deterministic identity metadata for a loaded tokenizer artifact."""
+    hasher = hashlib.sha256()
+    hasher.update(b"mini-gpt-tokenizer-v1")
+
+    for token_id, token_bytes in sorted(tokenizer.vocab.items()):
+        hasher.update(token_id.to_bytes(8, byteorder="big", signed=True))
+        _hash_bytes(hasher, token_bytes)
+
+    for merge, _ in sorted(tokenizer.merges_ranks.items(), key=lambda item: item[1]):
+        _hash_bytes(hasher, merge[0])
+        _hash_bytes(hasher, merge[1])
+
+    special_token_ids: dict[str, int] = {}
+    for token in sorted(tokenizer.special_tokens):
+        token_id = tokenizer.bytes_to_id.get(token.encode("utf-8"))
+        if token_id is None:
+            raise ValueError(f"special token is missing from vocabulary: {token}")
+        special_token_ids[token] = token_id
+        _hash_bytes(hasher, token.encode("utf-8"))
+        hasher.update(token_id.to_bytes(8, byteorder="big", signed=True))
+
+    return {
+        "format_version": 1,
+        "vocab_size": len(tokenizer.vocab),
+        "special_tokens": special_token_ids,
+        "fingerprint": hasher.hexdigest(),
+    }

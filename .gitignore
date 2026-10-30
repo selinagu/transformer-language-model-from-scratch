@@ -17,6 +17,10 @@ checkpoints/
 
 # Tokenizer / experiment artifacts
 outputs/
+/artifacts/
+*.metadata.json
+*.resolved.yaml
+/benchmarks/results/*.csv
 *.pkl
 *.pickle
 
@@ -39,6 +43,7 @@ __pycache__/
 venv/
 env/
 .env
+.env.*
 
 # OS / editor files
 .DS_Store

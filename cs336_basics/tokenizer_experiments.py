@@ -2,7 +2,6 @@ import os
 import time
 import random
 import numpy as np
-from pathlib import Path
 
 from cs336_basics.tokenizer import Tokenizer
 
@@ -35,7 +34,7 @@ def split_documents(text: str, delimiter: str = "<|endoftext|>") -> list[str]:
 def sample_documents(path: str, n: int = 10, seed: int = 0) -> list[str]:
     random.seed(seed)
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         text = f.read()
 
     docs = split_documents(text)
@@ -83,7 +82,7 @@ def encode_to_uint16(tokenizer: Tokenizer, input_path: str, output_path: str):
     """
     ids = []
 
-    with open(input_path, "r", encoding="utf-8") as f:
+    with open(input_path, encoding="utf-8") as f:
         for token_id in tokenizer.encode_iterable(f):
             ids.append(token_id)
 

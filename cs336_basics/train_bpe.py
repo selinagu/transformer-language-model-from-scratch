@@ -1,10 +1,12 @@
+import argparse
 import os
 import regex as re
 from collections import Counter
 from multiprocessing import Pool
 from typing import BinaryIO
 from collections import defaultdict
-import heapq
+
+from cs336_basics.tokenizer import save_tokenizer_artifacts
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -27,7 +29,7 @@ def split_on_special_tokens(text: str, special_tokens: list[str]) -> list[str]:
     """
     if not special_tokens:
         return [text]
-    
+
     pattern = "|".join(re.escape(tok) for tok in special_tokens)
 
     return re.split(pattern, text)
@@ -39,7 +41,7 @@ def pretokenize(text: str, special_tokens: list[str]) -> Counter[tuple[bytes, ..
     Pretokenize using a regex-based pre-tokenizer.
     """
     pretoken_counts = Counter()
-    
+
     for part in split_on_special_tokens(text, special_tokens):
         for match in re.finditer(PAT, part):
             pretoken = match.group()
@@ -107,7 +109,7 @@ def get_best_pair(pair_counts: dict[tuple[bytes, bytes], int]) -> tuple[bytes, b
     Naive way to get the most frequent pair.
     """
     if not pair_counts:
-        return None 
+        return None
     return max(pair_counts.items(), key = lambda x: (x[1], x[0]))[0]
 
 
@@ -131,8 +133,8 @@ def merge_pair_in_tokens(tokens: tuple[bytes, ...], pair: tuple[bytes, bytes]) -
 
 
 
-def apply_merge(
-        pretoken_counts: dict[tuple[bytes, ...], int], 
+def apply_naive_merge(
+        pretoken_counts: dict[tuple[bytes, ...], int],
         pair: tuple[bytes, bytes]
 ) -> dict[tuple[bytes, ...], int]:
     """
@@ -149,7 +151,7 @@ def apply_merge(
 
 
 # def apply_merge(
-#         pretoken_counts: dict[tuple[bytes, ...], int], 
+#         pretoken_counts: dict[tuple[bytes, ...], int],
 #         pair_counts: Counter[tuple[bytes, bytes]],
 #         pair_to_tokens: dict[tuple[bytes, bytes], set],
 #         best_pair: tuple[bytes, bytes],
@@ -188,7 +190,7 @@ def apply_merge(
 #         new_tok = merge_pair_in_tokens(tok, best_pair)
 
 #         pretoken_counts[new_tok] = pretoken_counts.get(new_tok, 0) + freq
-    
+
 #         # Add pair counts of the new token
 #         for i in range(len(new_tok) - 1):
 #             new_pair = (new_tok[i], new_tok[i + 1])
@@ -204,11 +206,11 @@ def apply_merge(
 
 
 def apply_merge(
-        pretoken_counts: dict[tuple[bytes, ...], int], 
+        pretoken_counts: dict[tuple[bytes, ...], int],
         pair_counts: Counter[tuple[bytes, bytes]],
         pair_to_tokens: dict[tuple[bytes, bytes], set],
         best_pair: tuple[bytes, bytes],
-        
+
 ) -> tuple[dict[tuple[bytes, ...], int],
     Counter[tuple[bytes, bytes]],
     dict[tuple[bytes, bytes], set]]:
@@ -239,7 +241,7 @@ def apply_merge(
         new_tok = merge_pair_in_tokens(tok, best_pair)
 
         pretoken_counts[new_tok] = pretoken_counts.get(new_tok, 0) + freq
-    
+
         # Add pair counts of the new token
         for i in range(len(new_tok) - 1):
             new_pair = (new_tok[i], new_tok[i + 1])
@@ -248,22 +250,30 @@ def apply_merge(
 
     return pretoken_counts, pair_counts, pair_to_tokens
 
-        
 
 
 
-def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+
+def train_bpe(
+    input_path: str,
+    vocab_size: int,
+    special_tokens: list[str],
+    num_processes: int = 4,
+) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """
     Train a BPE tokenizer.
     Returns vocab, the tokenizer vocabulary; merges, a list of BPE merges produced from training.
     """
+    if num_processes <= 0:
+        raise ValueError("num_processes must be positive")
+
     vocab = init_vocab(special_tokens)
     merges = []
 
     pretoken_counts = pretokenize_multiprocessing(
         input_path,
         special_tokens,
-        num_processes=4
+        num_processes=num_processes
     )
 
     next_id = len(vocab)
@@ -283,11 +293,11 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
         merges.append(best_pair)
 
         pretoken_counts, pair_counts, pair_to_tokens = apply_merge(
-            pretoken_counts, 
-            pair_counts, 
-            pair_to_tokens, 
+            pretoken_counts,
+            pair_counts,
+            pair_to_tokens,
             best_pair,
-            
+
         )
 
     return vocab, merges
@@ -353,11 +363,11 @@ def count_pretokens_in_chunk(input_path: str, start: int, end: int, special_toke
     chunk = chunk.replace("\r\n", "\n").replace("\r", "\n")
 
     return pretokenize(chunk, special_tokens)
-    
+
 
 
 def pretokenize_multiprocessing(
-        input_path: str, 
+        input_path: str,
         special_tokens: list[str],
         num_processes: int = 4
 ) -> Counter[tuple[bytes, ...]]:
@@ -366,10 +376,10 @@ def pretokenize_multiprocessing(
     """
 
     if not special_tokens:
-        with open(input_path, "r", encoding= "utf-8") as f:
+        with open(input_path, encoding="utf-8") as f:
             text = f.read()
         return pretokenize(text, special_tokens)
-    
+
     split_special_token = special_tokens[0].encode("utf-8")
 
     with open(input_path, "rb") as f:
@@ -378,7 +388,7 @@ def pretokenize_multiprocessing(
     jobs = []
     for start, end in zip(boundaries[:-1], boundaries[1:]):
         jobs.append((input_path, start, end, special_tokens))
-    
+
     with Pool(num_processes) as pool:
         counters = pool.starmap(count_pretokens_in_chunk, jobs)
 
@@ -394,18 +404,31 @@ def pretokenize_multiprocessing(
 
 
 
-if __name__ == "__main__":
-    input_path = "tiny_test.txt"
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train a byte-level BPE tokenizer.")
+    parser.add_argument("--input-path", required=True)
+    parser.add_argument("--vocab-size", required=True, type=int)
+    parser.add_argument("--vocab-path", required=True)
+    parser.add_argument("--merges-path", required=True)
+    parser.add_argument("--special-token", action="append", default=[])
+    parser.add_argument("--num-processes", type=int, default=4)
+    return parser.parse_args(argv)
 
-    with open(input_path, "w", encoding = "utf-8") as f:
-        f.write("low low lower<|endoftext|>newer wider\nhello world! hello world!")
 
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     vocab, merges = train_bpe(
-        input_path,
-        vocab_size=270,
-        special_tokens=["<|endoftext|>"]
+        input_path=args.input_path,
+        vocab_size=args.vocab_size,
+        special_tokens=args.special_token,
+        num_processes=args.num_processes,
     )
+    save_tokenizer_artifacts(vocab, merges, args.vocab_path, args.merges_path)
+    print(f"Saved vocabulary to {args.vocab_path}")
+    print(f"Saved merges to {args.merges_path}")
+    print(f"Vocabulary size: {len(vocab)}")
+    print(f"Number of merges: {len(merges)}")
 
-    print("vocab size:", len(vocab))
-    print("num merges:", len(merges))
-    print("first 10 merges:", merges[:10])
+
+if __name__ == "__main__":
+    main()

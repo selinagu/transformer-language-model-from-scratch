@@ -1,0 +1,22 @@
+model:
+  vocab_size: 264
+  context_length: 4
+  d_model: 8
+  num_layers: 1
+  num_heads: 2
+  d_ff: 16
+  theta: 10000.0
+  attention_backend: naive
+
+training:
+  batch_size: 2
+  max_iters: 2
+  learning_rate: 0.0003
+  min_learning_rate: 0.00003
+  warmup_iters: 0
+  weight_decay: 0.01
+  grad_clip: 1.0
+  eval_interval: 100
+  val_batches: 1
+  save_interval: 1
+  seed: 7

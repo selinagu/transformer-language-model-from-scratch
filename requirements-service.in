@@ -1,0 +1,10 @@
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+
+torch==2.11.0+cpu
+einops>=0.8
+numpy>=2.4
+fastapi>=0.116
+PyYAML>=6.0
+regex>=2026.3.32
+uvicorn>=0.30
